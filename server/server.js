@@ -95,6 +95,27 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/store', storeRoutes);
 app.use('/api/expenses', expenseRoutes);
 
+// ─── Welcome / Root Endpoint ──────────────────────────────────────────────────
+app.get(['/', '/api'], (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'GroceryIQ Retail Store API is live and running 🚀',
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: '/api/health',
+      auth: '/api/auth',
+      sales: '/api/sales',
+      inventory: '/api/inventory',
+      customers: '/api/customers',
+      staff: '/api/staff',
+      store: '/api/store',
+      expenses: '/api/expenses',
+      reports: '/api/reports'
+    }
+  });
+});
+
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
