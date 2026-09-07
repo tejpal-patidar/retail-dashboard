@@ -4,7 +4,7 @@ const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const mongoSanitize = require('express-mongo-sanitize');
 const xss = require('xss-clean');
-const { strictOrigin, apiLimiter } = require('./middleware/security');
+const { apiLimiter } = require('./middleware/security');
 const dotenv = require('dotenv');
 
 dotenv.config();
@@ -27,28 +27,65 @@ connectDB();
 
 const app = express();
 
-// Middleware
+// ─── CORS ─────────────────────────────────────────────────────────────────────
+// In production, restrict to known frontend origins.
+// In development, allow all origins for convenience.
+// IMPORTANT: CORS is a browser security feature — it is NOT an authorization mechanism.
+// Proper JWT-based authentication and ownership checks provide actual security.
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : [];
+
 app.use(cors({
-  origin: (origin, callback) => callback(null, true), // Allow all origins securely
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, Postman — auth handles their access)
+    if (!origin) return callback(null, true);
+
+    if (process.env.NODE_ENV === 'development') {
+      // Development: allow all origins
+      return callback(null, true);
+    }
+
+    // Production: check against allowed origins list
+    if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS: Origin ${origin} not allowed`));
+  },
   credentials: true,
+  optionsSuccessStatus: 200,
 }));
 
-// Security Middlewares
-// app.use(strictOrigin);    // Block non-browser requests (Postman/Hoppscotch)
-// app.use(apiLimiter);      // Global rate limiter (Disabled)
+// ─── Security Headers (Helmet) ─────────────────────────────────────────────────
 app.use(helmet({
-  referrerPolicy: { policy: 'strict-origin-when-cross-origin' }
-}));        // Secure HTTP headers
-app.use(mongoSanitize()); // Prevent NoSQL Injection
-app.use(xss());           // Prevent XSS attacks
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+    },
+  },
+  crossOriginEmbedderPolicy: false, // Allows PDFs to load in iframes
+}));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+// ─── Global Rate Limiter ────────────────────────────────────────────────────────
+// Applies to all API routes — prevents abuse and DoS
+// Auth endpoints have a stricter rate limit applied in routes/auth.js
+app.use('/api/', apiLimiter);
+
+// ─── Input Sanitization ────────────────────────────────────────────────────────
+app.use(mongoSanitize()); // Prevent NoSQL injection (strips $ and . from user input)
+app.use(xss());           // Prevent XSS (sanitizes HTML from user input)
+
+// ─── Body Parsers ─────────────────────────────────────────────────────────────
+app.use(express.json({ limit: '1mb' }));           // Prevent extremely large payloads
+app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 app.use(cookieParser());
 
-
-
-// API Routes
+// ─── API Routes ───────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/inventory', inventoryRoutes);
@@ -58,12 +95,17 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/store', storeRoutes);
 app.use('/api/expenses', expenseRoutes);
 
-// Health check
+// ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Error handler (must be last)
+// ─── 404 Handler for unmatched routes ─────────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: 'Route not found' });
+});
+
+// ─── Error Handler (must be last) ─────────────────────────────────────────────
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;

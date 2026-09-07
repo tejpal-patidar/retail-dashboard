@@ -79,7 +79,7 @@ const AddStaffModal = ({ onClose, onAdded }) => {
             <label className="form-label">Password *</label>
             <input className="form-input" name="password" type="password" placeholder="Min 6 characters" value={form.password} onChange={handleChange} required minLength={6} />
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div className="form-grid-2">
             <div className="form-group">
               <label className="form-label">Role</label>
               <select className="form-input" name="role" value={form.role} onChange={handleChange}>

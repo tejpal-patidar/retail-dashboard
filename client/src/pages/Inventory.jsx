@@ -81,7 +81,7 @@ const AddProductModal = ({ onClose, onAdded }) => {
         </div>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '20px 0 4px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div className="form-grid-2">
             <div className="form-group" style={{ gridColumn: '1 / -1' }}>
               <label className="form-label">Product ka Naam *</label>
               <input className="form-input" name="name" placeholder="e.g. Amul Doodh 1L" value={form.name} onChange={handleChange} required />
@@ -312,17 +312,17 @@ const Inventory = () => {
               </button>
             ))}
           </div>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <select
               className="form-input"
-              style={{ height: 36, fontSize: '0.82rem', padding: '0 10px' }}
+              style={{ height: 36, fontSize: '0.82rem', padding: '0 10px', width: 'auto' }}
               value={categoryFilter}
               onChange={e => setCategoryFilter(e.target.value)}
             >
               <option value="all">All Categories</option>
               {GROCERY_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
-            <div className="topbar-search" style={{ maxWidth: 220 }}>
+            <div className="search-box" style={{ maxWidth: 220, height: 36 }}>
               <Search size={14} color="var(--muted)" />
               <input
                 type="text"

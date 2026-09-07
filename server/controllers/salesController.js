@@ -6,10 +6,18 @@ const Store = require('../models/Store');
 const Staff = require('../models/Staff');
 const { sendBillEmail } = require('../utils/emailService');
 
+const ALLOWED_PAYMENT_METHODS = ['cash', 'card', 'upi'];
+
 // @desc    Get all sales with optional filters
 // @route   GET /api/sales
+// @access  Private (admin, manager, store_owner)
 const getSales = asyncHandler(async (req, res) => {
-  const { branch, startDate, endDate, limit = 50 } = req.query;
+  const rawLimit = parseInt(req.query.limit, 10);
+  const limit = !isNaN(rawLimit) && rawLimit > 0 && rawLimit <= 500 ? rawLimit : 50;
+
+  const { branch, startDate, endDate } = req.query;
+
+  // Always scope to authenticated user's store
   const filter = { store: req.storeId };
 
   if (branch) filter.branch = branch;
@@ -21,7 +29,7 @@ const getSales = asyncHandler(async (req, res) => {
 
   const sales = await Sale.find(filter)
     .sort({ createdAt: -1 })
-    .limit(parseInt(limit))
+    .limit(limit)
     .populate('customer', 'name email')
     .populate('staff', 'name email')
     .populate('products.product', 'name sku category');
@@ -31,9 +39,11 @@ const getSales = asyncHandler(async (req, res) => {
 
 // @desc    Get sales KPI summary
 // @route   GET /api/sales/summary
+// @access  Private (admin, manager, store_owner)
 const getSalesSummary = asyncHandler(async (req, res) => {
-  const { branch, period = '30' } = req.query;
-  const daysBack = parseInt(period);
+  const { branch } = req.query;
+  const rawDays = parseInt(req.query.period, 10);
+  const daysBack = !isNaN(rawDays) && rawDays > 0 && rawDays <= 365 ? rawDays : 30;
   const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
 
   const filter = { createdAt: { $gte: since }, store: req.storeId };
@@ -53,19 +63,23 @@ const getSalesSummary = asyncHandler(async (req, res) => {
   ]);
 
   const summary = result || { totalRevenue: 0, totalProfit: 0, transactionCount: 0, returns: 0 };
-  summary.aov = summary.transactionCount > 0 ? (summary.totalRevenue / summary.transactionCount) : 0;
-  summary.returnRate = summary.transactionCount > 0
-    ? ((summary.returns / summary.transactionCount) * 100).toFixed(1)
-    : 0;
+  summary.aov = summary.transactionCount > 0 ? summary.totalRevenue / summary.transactionCount : 0;
+  summary.returnRate =
+    summary.transactionCount > 0
+      ? ((summary.returns / summary.transactionCount) * 100).toFixed(1)
+      : 0;
 
   res.json({ success: true, data: summary });
 });
 
-// @desc    Get daily sales breakdown (last 14 days)
+// @desc    Get daily sales breakdown
 // @route   GET /api/sales/daily
+// @access  Private (admin, manager, store_owner)
 const getDailySales = asyncHandler(async (req, res) => {
-  const { branch, days = 14 } = req.query;
-  const since = new Date(Date.now() - parseInt(days) * 24 * 60 * 60 * 1000);
+  const { branch } = req.query;
+  const rawDays = parseInt(req.query.days, 10);
+  const days = !isNaN(rawDays) && rawDays > 0 && rawDays <= 90 ? rawDays : 14;
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
   const filter = { createdAt: { $gte: since }, store: req.storeId };
   if (branch) filter.branch = branch;
@@ -88,6 +102,7 @@ const getDailySales = asyncHandler(async (req, res) => {
 
 // @desc    Get monthly sales for bar chart
 // @route   GET /api/sales/monthly
+// @access  Private (admin, manager, store_owner)
 const getMonthlySales = asyncHandler(async (req, res) => {
   const { branch } = req.query;
   const since = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
@@ -113,31 +128,79 @@ const getMonthlySales = asyncHandler(async (req, res) => {
 
 // @desc    Create a new sale
 // @route   POST /api/sales
+// @access  Private (admin, manager, store_owner, staff)
 const createSale = asyncHandler(async (req, res) => {
+  // EXPLICIT WHITELIST — do not trust total, profit, store, staff from client
   const { products, customer, paymentMethod, branch, returnFlag } = req.body;
+
+  // Validate products array
+  if (!products || !Array.isArray(products) || products.length === 0) {
+    res.status(400);
+    throw new Error('Products array is required and must not be empty');
+  }
+
+  if (products.length > 100) {
+    res.status(400);
+    throw new Error('Too many products in a single sale');
+  }
+
+  // Validate paymentMethod
+  if (paymentMethod && !ALLOWED_PAYMENT_METHODS.includes(paymentMethod)) {
+    res.status(400);
+    throw new Error('Invalid payment method. Must be cash, card, or upi');
+  }
+
+  // Validate customer belongs to this store (if provided)
+  if (customer) {
+    if (!/^[a-fA-F0-9]{24}$/.test(customer)) {
+      res.status(400);
+      throw new Error('Invalid customer ID format');
+    }
+    const customerRecord = await Customer.findOne({ _id: customer, store: req.storeId });
+    if (!customerRecord) {
+      res.status(404);
+      throw new Error('Customer not found');
+    }
+  }
 
   let total = 0;
   let profit = 0;
   const saleProducts = [];
 
   for (const item of products) {
-    const product = await Product.findById(item.product);
-    if (!product) {
-      res.status(404);
-      throw new Error(`Product ${item.product} not found`);
+    if (!item.product || typeof item.qty !== 'number' || item.qty < 1) {
+      res.status(400);
+      throw new Error('Each product must have a valid product ID and quantity >= 1');
     }
+
+    if (!/^[a-fA-F0-9]{24}$/.test(item.product)) {
+      res.status(400);
+      throw new Error('Invalid product ID format');
+    }
+
+    // CRITICAL: Verify product belongs to the authenticated user's store
+    // This prevents User A from billing using products from Store B
+    const product = await Product.findOne({ _id: item.product, store: req.storeId });
+
+    if (!product) {
+      // Return 404 — do not reveal whether it's IDOR or just not found
+      res.status(404);
+      throw new Error(`Product not found in your store`);
+    }
+
     const lineTotal = item.qty * product.price;
     const lineProfit = item.qty * (product.price - product.costPrice);
     total += lineTotal;
     profit += lineProfit;
+
     saleProducts.push({
       product: product._id,
       qty: item.qty,
-      price: product.price,
-      costPrice: product.costPrice,
+      price: product.price,           // Always use server-side price — never trust client
+      costPrice: product.costPrice,   // Always use server-side cost — never trust client
     });
 
-    // Deduct stock
+    // Deduct stock (prevent negative stock)
     product.stock = Math.max(0, product.stock - item.qty);
     await product.save();
   }
@@ -150,20 +213,23 @@ const createSale = asyncHandler(async (req, res) => {
 
   const sale = await Sale.create({
     products: saleProducts,
-    total,
-    profit,
-    customer,
-    staff: req.user._id,
-    store: req.storeId,
-    branch: branch || req.user.branch,
-    paymentMethod,
-    returnFlag: returnFlag || false,
+    total,                                         // Computed server-side — never from client
+    profit,                                        // Computed server-side — never from client
+    customer: customer || null,
+    staff: req.user._id,                           // Always from verified token
+    store: req.storeId,                            // Always from verified token
+    branch: branch ? branch : req.user.branch,
+    paymentMethod: paymentMethod || 'cash',
+    returnFlag: returnFlag === true,               // Explicitly cast to boolean
   });
+
+  console.info(
+    `[AUDIT] Sale created | saleId: ${sale._id} | total: ${total} | store: ${req.storeId} | by: ${req.user._id}`
+  );
 
   // Emit socket event
   if (req.io) {
     req.io.emit('new_sale', { sale, revenue: total, profit });
-    // Check for low stock items
     for (const item of saleProducts) {
       const product = await Product.findById(item.product);
       if (product && product.stock <= product.reorderLevel) {
@@ -172,12 +238,14 @@ const createSale = asyncHandler(async (req, res) => {
     }
   }
 
-  // Populate sale and store to send email
+  // Send bill email (non-blocking, errors are caught internally)
   let emailStatus = { sent: false, previewUrl: null };
   try {
-    const populatedSale = await Sale.findById(sale._id).populate('customer', 'name email').populate('products.product', 'name');
+    const populatedSale = await Sale.findById(sale._id)
+      .populate('customer', 'name email')
+      .populate('products.product', 'name');
     const store = await Store.findById(req.storeId);
-    
+
     if (populatedSale.customer && populatedSale.customer.email) {
       const result = await sendBillEmail(populatedSale, store);
       if (result && result.success) {
@@ -186,7 +254,8 @@ const createSale = asyncHandler(async (req, res) => {
       }
     }
   } catch (err) {
-    console.error('Email sending failed', err);
+    // Email failure must never abort the sale response
+    console.error('[EMAIL] Sale email sending failed:', err.message);
   }
 
   res.status(201).json({ success: true, data: sale, emailStatus });
@@ -194,22 +263,29 @@ const createSale = asyncHandler(async (req, res) => {
 
 // @desc    Delete a sale (restores stock)
 // @route   DELETE /api/sales/:id
+// @access  Private (admin, store_owner)
 const deleteSale = asyncHandler(async (req, res) => {
+  // IDOR prevention: scope to authenticated store
   const sale = await Sale.findOne({ _id: req.params.id, store: req.storeId });
-  
+
   if (!sale) {
     res.status(404);
     throw new Error('Sale not found');
   }
 
-  // Restore stock
+  // Restore stock for each product — verify product still belongs to store
   for (const item of sale.products) {
-    await Product.findByIdAndUpdate(item.product, {
-      $inc: { stock: item.qty }
-    });
+    await Product.findOneAndUpdate(
+      { _id: item.product, store: req.storeId },
+      { $inc: { stock: item.qty } }
+    );
   }
 
   await Sale.deleteOne({ _id: req.params.id });
+
+  console.info(
+    `[AUDIT] Sale deleted | saleId: ${req.params.id} | store: ${req.storeId} | by: ${req.user._id}`
+  );
 
   if (req.io) {
     req.io.emit('sale_deleted', { id: req.params.id });
@@ -220,8 +296,11 @@ const deleteSale = asyncHandler(async (req, res) => {
 
 // @desc    Get top-selling products
 // @route   GET /api/sales/top-products
+// @access  Private (admin, manager, store_owner)
 const getTopProducts = asyncHandler(async (req, res) => {
-  const { branch, limit = 10 } = req.query;
+  const { branch } = req.query;
+  const rawLimit = parseInt(req.query.limit, 10);
+  const limit = !isNaN(rawLimit) && rawLimit > 0 && rawLimit <= 50 ? rawLimit : 10;
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
   const filter = { createdAt: { $gte: since }, store: req.storeId };
@@ -243,7 +322,7 @@ const getTopProducts = asyncHandler(async (req, res) => {
       },
     },
     { $sort: { totalRevenue: -1 } },
-    { $limit: parseInt(limit) },
+    { $limit: limit },
     {
       $lookup: {
         from: 'products',
@@ -270,27 +349,37 @@ const getTopProducts = asyncHandler(async (req, res) => {
 
 // @desc    Get current user's sales performance
 // @route   GET /api/sales/me
+// @access  Private (all authenticated)
 const getMySales = asyncHandler(async (req, res) => {
+  // This is safe — uses req.user._id and req.storeId from verified token
   const staffRecord = await Staff.findOne({ user: req.user._id, store: req.storeId });
-  
-  // Get today's sales for this user
+
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
-  
+
   const [todayStats] = await Sale.aggregate([
     { $match: { staff: req.user._id, store: req.storeId, createdAt: { $gte: startOfDay } } },
-    { $group: { _id: null, todayTotal: { $sum: '$total' }, todayCount: { $sum: 1 } } }
+    { $group: { _id: null, todayTotal: { $sum: '$total' }, todayCount: { $sum: 1 } } },
   ]);
 
-  res.json({ 
-    success: true, 
+  res.json({
+    success: true,
     data: {
       totalSales: staffRecord?.salesTotal || 0,
       totalCount: staffRecord?.transactionCount || 0,
       todayTotal: todayStats?.todayTotal || 0,
       todayCount: todayStats?.todayCount || 0,
-    }
+    },
   });
 });
 
-module.exports = { getSales, getSalesSummary, getDailySales, getMonthlySales, createSale, getTopProducts, deleteSale, getMySales };
+module.exports = {
+  getSales,
+  getSalesSummary,
+  getDailySales,
+  getMonthlySales,
+  createSale,
+  getTopProducts,
+  deleteSale,
+  getMySales,
+};

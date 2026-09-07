@@ -74,10 +74,10 @@ const Expenses = () => {
   return (
     <Layout title="Expense Tracker" subtitle="Manage store expenses and kharcha" onRefresh={fetchExpenses} loading={loading}>
       <div className="section">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <div style={{ background: 'var(--surface2)', padding: '15px 25px', borderRadius: 12, border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: '0.85rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1 }}>Total Expenses</div>
-            <div style={{ fontSize: '1.8rem', fontWeight: 700, color: 'var(--red)' }}>₹{total.toLocaleString()}</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 14 }}>
+          <div style={{ background: 'var(--surface2)', padding: '14px 20px', borderRadius: 12, border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 1 }}>Total Expenses</div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 700, color: 'var(--red)' }}>₹{total.toLocaleString()}</div>
           </div>
           <Button variant="primary" onClick={() => setShowForm(!showForm)}>
             {showForm ? 'Cancel' : '+ Add Expense'}
@@ -87,7 +87,7 @@ const Expenses = () => {
         {showForm && (
           <div className="card" style={{ marginBottom: 20 }}>
             <h3 style={{ marginTop: 0, marginBottom: 15 }}>Add New Expense</h3>
-            <form onSubmit={handleSubmit} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr auto', gap: 15, alignItems: 'end' }}>
+            <form onSubmit={handleSubmit} className="expense-form-grid">
               <div className="form-group">
                 <label className="form-label">Description</label>
                 <input type="text" required className="form-input" value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} placeholder="e.g. June Electricity Bill" />
@@ -107,7 +107,7 @@ const Expenses = () => {
                 <input type="date" required className="form-input" value={formData.date} onChange={e => setFormData({ ...formData, date: e.target.value })} />
               </div>
               <div className="form-group">
-                <Button type="submit" variant="primary" style={{ height: 42 }}>Save</Button>
+                <Button type="submit" variant="primary" style={{ height: 40, width: '100%' }}>Save</Button>
               </div>
             </form>
           </div>

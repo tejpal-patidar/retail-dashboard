@@ -68,7 +68,7 @@ const Topbar = ({ title, subtitle, onRefresh, loading, onMenuClick }) => {
 
           {showNotifications && (
             <div style={{
-              position: 'absolute', top: '120%', right: 0, width: 280,
+              position: 'absolute', top: '120%', right: 0, width: 280, maxWidth: 'calc(100vw - 30px)',
               background: 'var(--surface1)', border: '1px solid var(--border)',
               borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.5)', zIndex: 100,
               display: 'flex', flexDirection: 'column'

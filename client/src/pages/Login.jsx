@@ -54,8 +54,8 @@ const Login = () => {
         <form className="login-form" onSubmit={handleSubmit} id="login-form">
           <div className="input-group">
             <label className="input-label" htmlFor="login-email">Email Address</label>
-            <div className="topbar-search" style={{ background: 'var(--surface)', marginTop: 0 }}>
-              <Mail size={15} color="var(--muted)" />
+            <div className="input-icon-box">
+              <Mail size={16} color="var(--muted)" />
               <input
                 id="login-email"
                 type="email"
@@ -70,8 +70,8 @@ const Login = () => {
 
           <div className="input-group">
             <label className="input-label" htmlFor="login-password">Password</label>
-            <div className="topbar-search" style={{ background: 'var(--surface)', marginTop: 0 }}>
-              <Lock size={15} color="var(--muted)" />
+            <div className="input-icon-box">
+              <Lock size={16} color="var(--muted)" />
               <input
                 id="login-password"
                 type={showPwd ? 'text' : 'password'}
@@ -84,9 +84,9 @@ const Login = () => {
               <button
                 type="button"
                 onClick={() => setShowPwd(v => !v)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: 0 }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '0 4px', display: 'flex', alignItems: 'center' }}
               >
-                {showPwd ? <EyeOff size={15} /> : <Eye size={15} />}
+                {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
           </div>

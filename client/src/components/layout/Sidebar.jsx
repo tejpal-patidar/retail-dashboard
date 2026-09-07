@@ -67,6 +67,7 @@ const Sidebar = ({ alertCount = 0, isOpen, onClose }) => {
             to={to}
             end={to === '/'}
             className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+            onClick={() => onClose && onClose()}
           >
             <Icon className="nav-icon" size={18} />
             {label}

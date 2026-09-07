@@ -49,8 +49,8 @@ const Register = () => {
         <form className="login-form" onSubmit={handleSubmit}>
           <div className="input-group">
             <label className="input-label">Store Name *</label>
-            <div className="topbar-search" style={{ background: 'var(--surface)', marginTop: 0 }}>
-              <Store size={15} color="var(--muted)" />
+            <div className="input-icon-box">
+              <Store size={16} color="var(--muted)" />
               <input
                 type="text"
                 placeholder="My Grocery Store"
@@ -61,11 +61,11 @@ const Register = () => {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div className="form-grid-2">
             <div className="input-group">
               <label className="input-label">Your Name *</label>
-              <div className="topbar-search" style={{ background: 'var(--surface)', marginTop: 0 }}>
-                <User size={15} color="var(--muted)" />
+              <div className="input-icon-box">
+                <User size={16} color="var(--muted)" />
                 <input
                   type="text"
                   placeholder="John Doe"
@@ -78,8 +78,8 @@ const Register = () => {
 
             <div className="input-group">
               <label className="input-label">Phone</label>
-              <div className="topbar-search" style={{ background: 'var(--surface)', marginTop: 0 }}>
-                <Phone size={15} color="var(--muted)" />
+              <div className="input-icon-box">
+                <Phone size={16} color="var(--muted)" />
                 <input
                   type="text"
                   placeholder="1234567890"
@@ -93,8 +93,8 @@ const Register = () => {
 
           <div className="input-group">
             <label className="input-label">Email Address *</label>
-            <div className="topbar-search" style={{ background: 'var(--surface)', marginTop: 0 }}>
-              <Mail size={15} color="var(--muted)" />
+            <div className="input-icon-box">
+              <Mail size={16} color="var(--muted)" />
               <input
                 type="email"
                 placeholder="you@groceryiq.com"
@@ -107,8 +107,8 @@ const Register = () => {
 
           <div className="input-group">
             <label className="input-label">Password *</label>
-            <div className="topbar-search" style={{ background: 'var(--surface)', marginTop: 0 }}>
-              <Lock size={15} color="var(--muted)" />
+            <div className="input-icon-box">
+              <Lock size={16} color="var(--muted)" />
               <input
                 type="password"
                 placeholder="••••••••"
