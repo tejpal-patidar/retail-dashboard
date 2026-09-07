@@ -46,8 +46,12 @@ app.use(cors({
       return callback(null, true);
     }
 
-    // Production: check against allowed origins list
-    if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+    // Production: check against allowed origins list or any .vercel.app deployment
+    if (
+      allowedOrigins.length === 0 ||
+      allowedOrigins.includes(origin) ||
+      origin.endsWith('.vercel.app')
+    ) {
       return callback(null, true);
     }
 
@@ -73,8 +77,7 @@ app.use(helmet({
 
 // ─── Global Rate Limiter ────────────────────────────────────────────────────────
 // Applies to all API routes — prevents abuse and DoS
-// Auth endpoints have a stricter rate limit applied in routes/auth.js
-app.use('/api/', apiLimiter);
+app.use(apiLimiter);
 
 // ─── Input Sanitization ────────────────────────────────────────────────────────
 app.use(mongoSanitize()); // Prevent NoSQL injection (strips $ and . from user input)
@@ -86,14 +89,21 @@ app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 app.use(cookieParser());
 
 // ─── API Routes ───────────────────────────────────────────────────────────────
-app.use('/api/auth', authRoutes);
-app.use('/api/sales', salesRoutes);
-app.use('/api/inventory', inventoryRoutes);
-app.use('/api/customers', customerRoutes);
-app.use('/api/staff', staffRoutes);
-app.use('/api/reports', reportRoutes);
-app.use('/api/store', storeRoutes);
-app.use('/api/expenses', expenseRoutes);
+// Helper to mount routes under a prefix (/api and fallback root)
+const mountApiRoutes = (prefix = '') => {
+  app.use(`${prefix}/auth`, authRoutes);
+  app.use(`${prefix}/sales`, salesRoutes);
+  app.use(`${prefix}/inventory`, inventoryRoutes);
+  app.use(`${prefix}/customers`, customerRoutes);
+  app.use(`${prefix}/staff`, staffRoutes);
+  app.use(`${prefix}/reports`, reportRoutes);
+  app.use(`${prefix}/store`, storeRoutes);
+  app.use(`${prefix}/expenses`, expenseRoutes);
+};
+
+// Mount under /api (standard) and '' (fallback if client baseURL omits /api)
+mountApiRoutes('/api');
+mountApiRoutes('');
 
 // ─── Welcome / Root Endpoint ──────────────────────────────────────────────────
 app.get(['/', '/api'], (req, res) => {
@@ -117,7 +127,7 @@ app.get(['/', '/api'], (req, res) => {
 });
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
-app.get('/api/health', (req, res) => {
+app.get(['/health', '/api/health'], (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 

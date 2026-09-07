@@ -29,7 +29,7 @@ const apiLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.path === '/api/health', // skip health check
+  skip: (req) => ['/api/health', '/health', '/', '/api'].includes(req.path),
 });
 
 // NOTE: strictOrigin (blocking Postman/Hoppscotch) has been intentionally removed.
