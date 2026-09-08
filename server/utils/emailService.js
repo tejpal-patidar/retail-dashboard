@@ -1,34 +1,83 @@
 const nodemailer = require('nodemailer');
 const PDFDocument = require('pdfkit');
 
-// Helper to create a dynamic transporter based on store config
+/**
+ * Helper to create a dynamic transporter based on store config or environment fallback
+ */
 const getTransporter = async (store) => {
-  // If store has valid email config, use real SMTP
-  if (store && store.emailConfig && store.emailConfig.email && store.emailConfig.appPassword) {
-    return nodemailer.createTransport({
-      service: 'gmail', // You can change this to use host/port for generic SMTP
-      auth: {
-        user: store.emailConfig.email,
-        pass: store.emailConfig.appPassword
-      }
-    });
+  // 1. If store has valid email config in DB, use store's Gmail/SMTP
+  const storeEmail = store?.emailConfig?.email?.trim();
+  const storePass = store?.emailConfig?.appPassword?.trim();
+  if (storeEmail && storePass) {
+    return {
+      transporter: nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          user: storeEmail,
+          pass: storePass
+        }
+      }),
+      fromEmail: storeEmail,
+      isReal: true
+    };
   }
 
-  // Fallback to Ethereal for testing
+  // 2. Global fallback to process.env credentials
+  const envEmail = process.env.EMAIL_USER?.trim();
+  const envPass = process.env.EMAIL_PASS?.trim();
+  if (envEmail && envPass) {
+    return {
+      transporter: nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          user: envEmail,
+          pass: envPass
+        }
+      }),
+      fromEmail: envEmail,
+      isReal: true
+    };
+  }
+
+  // 3. Fallback to Ethereal test account (for dev sandbox only)
   try {
     const account = await nodemailer.createTestAccount();
-    return nodemailer.createTransport({
-      host: account.smtp.host,
-      port: account.smtp.port,
-      secure: account.smtp.secure,
-      auth: {
-        user: account.user,
-        pass: account.pass
-      }
-    });
+    return {
+      transporter: nodemailer.createTransport({
+        host: account.smtp.host,
+        port: account.smtp.port,
+        secure: account.smtp.secure,
+        auth: {
+          user: account.user,
+          pass: account.pass
+        }
+      }),
+      fromEmail: account.user,
+      isReal: false
+    };
   } catch (err) {
-    console.error('Failed to create ethereal test account', err);
+    console.error('[EMAIL] Failed to create ethereal test account:', err.message);
     return null;
+  }
+};
+
+/**
+ * Verify current email configuration
+ */
+const verifyEmailConfig = async (store) => {
+  try {
+    const transportData = await getTransporter(store);
+    if (!transportData || !transportData.transporter) {
+      return { success: false, error: 'No email service or credentials configured' };
+    }
+    await transportData.transporter.verify();
+    return {
+      success: true,
+      fromEmail: transportData.fromEmail,
+      isReal: transportData.isReal
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
   }
 };
 
@@ -44,48 +93,71 @@ const generatePDF = (sale, storeName) => {
       doc.on('end', () => resolve(Buffer.concat(buffers)));
 
       // Header
-      doc.fontSize(20).text(storeName || 'GroceryIQ Store', { align: 'center' });
-      doc.fontSize(12).text('Tax Invoice / Bill of Supply', { align: 'center' });
+      const displayName = storeName || 'RetailIQ Store';
+      doc.fontSize(20).font('Helvetica-Bold').text(displayName, { align: 'center' });
+      doc.fontSize(12).font('Helvetica').text('Tax Invoice / Bill of Supply', { align: 'center' });
       doc.moveDown();
 
       // Bill details
-      doc.fontSize(10)
-         .text(`Bill No: ${sale._id}`)
-         .text(`Date: ${new Date(sale.createdAt).toLocaleString('en-IN')}`)
-         .text(`Cashier: ${sale.staff?.name || 'Staff'}`)
-         .text(`Payment: ${sale.paymentMethod?.toUpperCase() || 'CASH'}`);
+      const dateStr = sale.createdAt ? new Date(sale.createdAt).toLocaleString('en-IN') : new Date().toLocaleString('en-IN');
+      const billIdStr = sale._id ? sale._id.toString() : 'N/A';
+      const cashierName = sale.staff?.name || 'Staff';
+      const paymentStr = (sale.paymentMethod || 'cash').toUpperCase();
 
-      if (sale.customer) {
-        doc.text(`Customer: ${sale.customer.name}`);
+      doc.fontSize(10)
+         .text(`Bill No: ${billIdStr}`)
+         .text(`Date: ${dateStr}`)
+         .text(`Cashier: ${cashierName}`)
+         .text(`Payment: ${paymentStr}`);
+
+      const custName = sale.customer?.name || sale.customerName;
+      if (custName) {
+        doc.text(`Customer: ${custName}`);
+      }
+      const custContact = sale.customer?.email || sale.customerEmail || sale.customer?.phone || sale.customerPhone;
+      if (custContact) {
+        doc.text(`Contact: ${custContact}`);
       }
       doc.moveDown();
 
       // Table Header
       const tableTop = doc.y;
-      doc.text('Item', 50, tableTop)
+      doc.font('Helvetica-Bold')
+         .text('Item', 50, tableTop)
          .text('Qty', 300, tableTop)
-         .text('Price', 350, tableTop)
+         .text('Price', 360, tableTop)
          .text('Total', 450, tableTop);
       
       doc.moveTo(50, doc.y + 5).lineTo(500, doc.y + 5).stroke();
-      doc.moveDown();
+      doc.moveDown(0.5);
 
       // Items
       let y = doc.y;
-      sale.products.forEach(item => {
-        doc.text(item.product?.name || 'Unknown Item', 50, y, { width: 240 })
-           .text(item.qty.toString(), 300, y)
-           .text(`Rs. ${item.price.toFixed(2)}`, 350, y)
-           .text(`Rs. ${(item.qty * item.price).toFixed(2)}`, 450, y);
-        y += 15;
+      doc.font('Helvetica');
+      (sale.products || []).forEach(item => {
+        if (y > 700) {
+          doc.addPage();
+          y = 50;
+        }
+        const productName = item.product?.name || item.name || 'Unknown Item';
+        const qtyStr = (item.qty || 1).toString();
+        const price = typeof item.price === 'number' ? item.price : 0;
+        const lineTotal = (item.qty || 1) * price;
+
+        doc.text(productName, 50, y, { width: 240 })
+           .text(qtyStr, 300, y)
+           .text(`Rs. ${price.toFixed(2)}`, 360, y)
+           .text(`Rs. ${lineTotal.toFixed(2)}`, 450, y);
+        y += 18;
       });
 
       doc.moveTo(50, y + 5).lineTo(500, y + 5).stroke();
       
       // Totals
+      const totalAmount = typeof sale.total === 'number' ? sale.total : 0;
       doc.fontSize(12).font('Helvetica-Bold')
          .text('Grand Total:', 300, y + 15)
-         .text(`Rs. ${sale.total.toFixed(2)}`, 400, y + 15, { align: 'right' });
+         .text(`Rs. ${totalAmount.toFixed(2)}`, 400, y + 15, { align: 'right' });
 
       doc.moveDown(2);
       doc.fontSize(10).font('Helvetica').text('Thank you for shopping with us!', { align: 'center' });
@@ -99,26 +171,37 @@ const generatePDF = (sale, storeName) => {
 
 /**
  * Sends an email with the PDF attached
+ * @param {Object} sale - The sale document (or populated object)
+ * @param {Object} store - The store document
+ * @param {String} [targetEmail] - Optional target recipient email address
  */
-const sendBillEmail = async (sale, store) => {
-  if (!sale.customer || !sale.customer.email) return;
+const sendBillEmail = async (sale, store, targetEmail = null) => {
+  const recipientEmail = (targetEmail || sale.customer?.email || sale.customerEmail)?.trim();
+  if (!recipientEmail) {
+    return { success: false, error: 'No customer email address provided' };
+  }
 
-  const transporter = await getTransporter(store);
-  if (!transporter) return;
+  const transportData = await getTransporter(store);
+  if (!transportData || !transportData.transporter) {
+    return { success: false, error: 'Email service configuration unavailable. Check server email settings.' };
+  }
+
+  const { transporter, fromEmail, isReal } = transportData;
+  const storeName = store?.name || 'Retail Store';
+  const customerName = sale.customer?.name || sale.customerName || 'Valued Customer';
+  const billShortId = sale._id ? sale._id.toString().slice(-6) : '';
 
   try {
-    const pdfBuffer = await generatePDF(sale, store?.name);
-    const senderEmail = store?.emailConfig?.email || 'billing@groceryiq.com';
-    const storeName = store?.name || 'GroceryIQ';
+    const pdfBuffer = await generatePDF(sale, storeName);
 
     const mailOptions = {
-      from: `"${storeName}" <${senderEmail}>`,
-      to: sale.customer.email,
-      subject: `Your Bill from ${storeName}`,
-      text: `Hello ${sale.customer.name},\n\nThank you for your purchase. Please find your bill attached.\n\nTotal: Rs. ${sale.total}\n\nRegards,\n${storeName}`,
+      from: `"${storeName}" <${fromEmail}>`,
+      to: recipientEmail,
+      subject: `Invoice for Bill #${billShortId} - ${storeName}`,
+      text: `Hello ${customerName},\n\nThank you for shopping at ${storeName}!\n\nPlease find attached the tax invoice for your purchase.\n\nBill ID: ${sale._id}\nTotal Amount: Rs. ${sale.total}\nPayment Method: ${(sale.paymentMethod || 'cash').toUpperCase()}\n\nWarm regards,\n${storeName}`,
       attachments: [
         {
-          filename: `Invoice_${sale._id}.pdf`,
+          filename: `Invoice_${sale._id || 'bill'}.pdf`,
           content: pdfBuffer,
           contentType: 'application/pdf'
         }
@@ -127,19 +210,19 @@ const sendBillEmail = async (sale, store) => {
 
     const info = await transporter.sendMail(mailOptions);
     
-    // Determine if it was sent via Ethereal (for dev/testing) or real SMTP
-    if (transporter.transporter?.name === 'SMTP (Ethereal)') {
+    if (!isReal) {
       const previewUrl = nodemailer.getTestMessageUrl(info);
-      console.log(`📧 Test Email sent to ${sale.customer.email}. Preview URL: ${previewUrl}`);
-      return { success: true, previewUrl };
+      console.log(`📧 [TEST EMAIL] Generated for ${recipientEmail}. Preview: ${previewUrl}`);
+      return { success: true, previewUrl, recipient: recipientEmail, isTest: true };
     } else {
-      console.log(`📧 Real Email sent to ${sale.customer.email}`);
-      return { success: true, previewUrl: null }; 
+      console.log(`📧 [REAL EMAIL] Sent successfully to ${recipientEmail} from ${fromEmail}`);
+      return { success: true, previewUrl: null, recipient: recipientEmail, isTest: false }; 
     }
   } catch (error) {
-    console.error('Error sending email bill:', error);
+    console.error(`[EMAIL] Error sending bill email to ${recipientEmail}:`, error);
     return { success: false, error: error.message };
   }
 };
 
-module.exports = { sendBillEmail, generatePDF };
+module.exports = { sendBillEmail, generatePDF, verifyEmailConfig, getTransporter };
+

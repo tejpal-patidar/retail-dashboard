@@ -5,7 +5,7 @@ import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import RevenueChart from '../components/charts/RevenueChart';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { IndianRupee, TrendingUp, ShoppingBag, Percent } from 'lucide-react';
+import { IndianRupee, TrendingUp, ShoppingBag, Percent, Mail } from 'lucide-react';
 import { useSales } from '../hooks/useSales';
 
 const Sales = () => {
@@ -124,19 +124,38 @@ const Sales = () => {
               { key: 'total', label: 'Amount', render: v => <span style={{ fontWeight: 600, color: 'var(--accent)' }}>₹{v.toLocaleString()}</span> },
               { key: 'paymentMethod', label: 'Payment', render: v => <Badge color={paymentColor[v] || 'muted'}>{v}</Badge> },
               { key: 'actions', label: 'Action', render: (_, row) => (
-                ['admin', 'store_owner'].includes(JSON.parse(localStorage.getItem('user') || '{}')?.role) ? (
-                  <Button size="sm" variant="danger" onClick={async () => {
-                    if (window.confirm('Delete this bill? Stock will be restored.')) {
-                      try {
-                        await import('../services/api').then(m => m.default.delete(`/sales/${row._id}`));
-                        refetch();
-                        import('react-hot-toast').then(m => m.default.success('Bill deleted successfully'));
-                      } catch(e) {
-                        import('react-hot-toast').then(m => m.default.error('Failed to delete bill'));
-                      }
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <Button size="sm" variant="ghost" title="Email invoice to customer" onClick={async () => {
+                    const defaultEmail = row.customerEmail || row.customer?.email || '';
+                    const email = window.prompt(`Send invoice for Bill #${row._id.slice(-6)} to email:`, defaultEmail);
+                    if (!email || !email.trim()) return;
+                    
+                    const toast = (await import('react-hot-toast')).default;
+                    const toastId = toast.loading('Sending bill invoice...');
+                    try {
+                      const api = (await import('../services/api')).default;
+                      const { data } = await api.post(`/sales/${row._id}/send-email`, { email: email.trim() });
+                      toast.success(data.message || 'Invoice emailed successfully!', { id: toastId });
+                    } catch (err) {
+                      toast.error(err.response?.data?.message || 'Failed to send invoice email', { id: toastId });
                     }
-                  }}>Delete</Button>
-                ) : null
+                  }}>
+                    <Mail size={14} style={{ marginRight: 4 }} /> Email
+                  </Button>
+                  {['admin', 'store_owner'].includes(JSON.parse(localStorage.getItem('user') || '{}')?.role) && (
+                    <Button size="sm" variant="danger" onClick={async () => {
+                      if (window.confirm('Delete this bill? Stock will be restored.')) {
+                        try {
+                          await import('../services/api').then(m => m.default.delete(`/sales/${row._id}`));
+                          refetch();
+                          import('react-hot-toast').then(m => m.default.success('Bill deleted successfully'));
+                        } catch(e) {
+                          import('react-hot-toast').then(m => m.default.error('Failed to delete bill'));
+                        }
+                      }
+                    }}>Delete</Button>
+                  )}
+                </div>
               )}
             ]}
             data={sales}

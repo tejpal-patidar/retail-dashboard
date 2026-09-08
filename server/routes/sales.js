@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const {
-  getSales, getSalesSummary, getDailySales, getMonthlySales, createSale, getTopProducts
+  getSales, getSalesSummary, getDailySales, getMonthlySales, createSale, sendSaleEmail, getTopProducts
 } = require('../controllers/salesController');
 const { protect } = require('../middleware/auth');
 const roleCheck = require('../middleware/roleCheck');
@@ -20,6 +20,9 @@ router.get('/me', getMySales);
 
 // Sales creation is open to staff as well (for POS)
 router.post('/', roleCheck('admin', 'manager', 'store_owner', 'staff'), createSale);
+
+// Send or resend bill email to customer
+router.post('/:id/send-email', roleCheck('admin', 'manager', 'store_owner', 'staff'), sendSaleEmail);
 
 // Delete sale is only for admin/store_owner
 const { deleteSale } = require('../controllers/salesController');

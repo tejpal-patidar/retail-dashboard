@@ -3,6 +3,7 @@ const Sale = require('../models/Sale');
 const Product = require('../models/Product');
 const Customer = require('../models/Customer');
 const Store = require('../models/Store');
+const User = require('../models/User');
 const Staff = require('../models/Staff');
 const { sendBillEmail } = require('../utils/emailService');
 
@@ -131,7 +132,17 @@ const getMonthlySales = asyncHandler(async (req, res) => {
 // @access  Private (admin, manager, store_owner, staff)
 const createSale = asyncHandler(async (req, res) => {
   // EXPLICIT WHITELIST — do not trust total, profit, store, staff from client
-  const { products, customer, paymentMethod, branch, returnFlag } = req.body;
+  const {
+    products,
+    customer,
+    customerEmail,
+    customerName,
+    customerPhone,
+    newCustomer,
+    paymentMethod,
+    branch,
+    returnFlag
+  } = req.body;
 
   // Validate products array
   if (!products || !Array.isArray(products) || products.length === 0) {
@@ -150,16 +161,62 @@ const createSale = asyncHandler(async (req, res) => {
     throw new Error('Invalid payment method. Must be cash, card, or upi');
   }
 
+  let resolvedCustomerId = customer || null;
+  let finalCustomerName = (customerName || '').trim();
+  let finalCustomerEmail = (customerEmail || '').trim();
+  let finalCustomerPhone = (customerPhone || '').trim();
+
   // Validate customer belongs to this store (if provided)
-  if (customer) {
-    if (!/^[a-fA-F0-9]{24}$/.test(customer)) {
+  if (resolvedCustomerId) {
+    if (!/^[a-fA-F0-9]{24}$/.test(resolvedCustomerId)) {
       res.status(400);
       throw new Error('Invalid customer ID format');
     }
-    const customerRecord = await Customer.findOne({ _id: customer, store: req.storeId });
+    const customerRecord = await Customer.findOne({ _id: resolvedCustomerId, store: req.storeId });
     if (!customerRecord) {
       res.status(404);
       throw new Error('Customer not found');
+    }
+    if (!finalCustomerName) finalCustomerName = customerRecord.name || '';
+    if (!finalCustomerEmail) finalCustomerEmail = customerRecord.email || '';
+    if (!finalCustomerPhone) finalCustomerPhone = customerRecord.phone || '';
+  } else if (newCustomer && (newCustomer.name || newCustomer.email || newCustomer.phone)) {
+    // If inline newCustomer details provided (e.g. from POS form), auto-save/find customer
+    try {
+      let existingCust = null;
+      if (newCustomer.phone && newCustomer.phone.trim()) {
+        existingCust = await Customer.findOne({ phone: newCustomer.phone.trim(), store: req.storeId });
+      }
+      if (!existingCust && newCustomer.email && newCustomer.email.trim()) {
+        existingCust = await Customer.findOne({ email: newCustomer.email.trim(), store: req.storeId });
+      }
+
+      if (existingCust) {
+        resolvedCustomerId = existingCust._id;
+        finalCustomerName = existingCust.name;
+        finalCustomerEmail = newCustomer.email?.trim() || existingCust.email;
+        finalCustomerPhone = newCustomer.phone?.trim() || existingCust.phone;
+      } else if (newCustomer.name && newCustomer.name.trim()) {
+        const createdCust = await Customer.create({
+          name: newCustomer.name.trim(),
+          email: (newCustomer.email || '').trim(),
+          phone: (newCustomer.phone || '').trim(),
+          store: req.storeId,
+          branch: branch ? branch : req.user.branch || 'Main Branch',
+          segment: 'Regular',
+          visits: 1,
+          totalSpent: 0
+        });
+        resolvedCustomerId = createdCust._id;
+        finalCustomerName = createdCust.name;
+        finalCustomerEmail = createdCust.email;
+        finalCustomerPhone = createdCust.phone;
+      }
+    } catch (custErr) {
+      console.warn('[SALE] Auto-creating customer encountered error:', custErr.message);
+      if (!finalCustomerName) finalCustomerName = newCustomer.name || '';
+      if (!finalCustomerEmail) finalCustomerEmail = newCustomer.email || '';
+      if (!finalCustomerPhone) finalCustomerPhone = newCustomer.phone || '';
     }
   }
 
@@ -179,11 +236,9 @@ const createSale = asyncHandler(async (req, res) => {
     }
 
     // CRITICAL: Verify product belongs to the authenticated user's store
-    // This prevents User A from billing using products from Store B
     const product = await Product.findOne({ _id: item.product, store: req.storeId });
 
     if (!product) {
-      // Return 404 — do not reveal whether it's IDOR or just not found
       res.status(404);
       throw new Error(`Product not found in your store`);
     }
@@ -211,11 +266,22 @@ const createSale = asyncHandler(async (req, res) => {
     { $inc: { salesTotal: total, transactionCount: 1 } }
   );
 
+  // Update customer totalSpent and visits if customer is registered
+  if (resolvedCustomerId) {
+    await Customer.findByIdAndUpdate(resolvedCustomerId, {
+      $inc: { visits: 1, totalSpent: total },
+      $set: { lastVisit: new Date() }
+    }).catch(err => console.warn('[SALE] Updating customer stats failed:', err.message));
+  }
+
   const sale = await Sale.create({
     products: saleProducts,
     total,                                         // Computed server-side — never from client
     profit,                                        // Computed server-side — never from client
-    customer: customer || null,
+    customer: resolvedCustomerId,
+    customerName: finalCustomerName || undefined,
+    customerEmail: finalCustomerEmail || undefined,
+    customerPhone: finalCustomerPhone || undefined,
     staff: req.user._id,                           // Always from verified token
     store: req.storeId,                            // Always from verified token
     branch: branch ? branch : req.user.branch,
@@ -239,23 +305,32 @@ const createSale = asyncHandler(async (req, res) => {
   }
 
   // Send bill email (non-blocking, errors are caught internally)
-  let emailStatus = { sent: false, previewUrl: null };
+  let emailStatus = { sent: false, previewUrl: null, recipient: null, error: null };
   try {
     const populatedSale = await Sale.findById(sale._id)
-      .populate('customer', 'name email')
+      .populate('customer', 'name email phone')
+      .populate('staff', 'name email')
       .populate('products.product', 'name');
     const store = await Store.findById(req.storeId);
 
-    if (populatedSale.customer && populatedSale.customer.email) {
-      const result = await sendBillEmail(populatedSale, store);
+    const targetRecipient = finalCustomerEmail || populatedSale.customer?.email;
+    if (targetRecipient) {
+      const result = await sendBillEmail(populatedSale, store, targetRecipient);
       if (result && result.success) {
         emailStatus.sent = true;
         emailStatus.previewUrl = result.previewUrl;
+        emailStatus.recipient = targetRecipient;
+        emailStatus.isTest = result.isTest;
+      } else {
+        emailStatus.error = result?.error || 'Email delivery failed';
       }
+    } else {
+      emailStatus.error = 'No customer email address provided for this sale';
     }
   } catch (err) {
     // Email failure must never abort the sale response
     console.error('[EMAIL] Sale email sending failed:', err.message);
+    emailStatus.error = err.message;
   }
 
   res.status(201).json({ success: true, data: sale, emailStatus });
@@ -373,12 +448,59 @@ const getMySales = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc    Send / Resend bill email to customer
+// @route   POST /api/sales/:id/send-email
+// @access  Private (admin, manager, store_owner, staff)
+const sendSaleEmail = asyncHandler(async (req, res) => {
+  const sale = await Sale.findOne({ _id: req.params.id, store: req.storeId })
+    .populate('customer', 'name email phone')
+    .populate('staff', 'name email')
+    .populate('products.product', 'name');
+
+  if (!sale) {
+    res.status(404);
+    throw new Error('Sale not found');
+  }
+
+  const targetEmail = (req.body.email || sale.customerEmail || sale.customer?.email)?.trim();
+  if (!targetEmail) {
+    res.status(400);
+    throw new Error('Please provide an email address to send the bill to');
+  }
+
+  const store = await Store.findById(req.storeId);
+  const result = await sendBillEmail(sale, store, targetEmail);
+
+  if (!result || !result.success) {
+    res.status(500);
+    throw new Error(result?.error || 'Failed to send bill email');
+  }
+
+  // Update customerEmail on sale if it wasn't recorded
+  if (!sale.customerEmail) {
+    sale.customerEmail = targetEmail;
+    await sale.save();
+  }
+
+  res.json({
+    success: true,
+    message: `Bill invoice successfully sent to ${targetEmail}`,
+    emailStatus: {
+      sent: true,
+      previewUrl: result.previewUrl,
+      recipient: targetEmail,
+      isTest: result.isTest
+    }
+  });
+});
+
 module.exports = {
   getSales,
   getSalesSummary,
   getDailySales,
   getMonthlySales,
   createSale,
+  sendSaleEmail,
   getTopProducts,
   deleteSale,
   getMySales,

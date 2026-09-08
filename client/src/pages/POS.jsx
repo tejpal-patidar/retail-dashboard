@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import Layout from '../components/layout/Layout';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
-import { Search, ShoppingCart, Package, Plus, Minus, Trash2, Mail, CheckCircle2, User, QrCode } from 'lucide-react';
+import { Search, ShoppingCart, Package, Plus, Minus, Trash2, Mail, CheckCircle2, AlertCircle, Send, User, QrCode } from 'lucide-react';
 import { QRCodeCanvas } from 'qrcode.react';
 import { useInventory } from '../hooks/useInventory';
 import api from '../services/api';
@@ -49,9 +49,13 @@ const POS = () => {
   // Cart state
   const [cart, setCart] = useState([]);
   const [selectedCustomer, setSelectedCustomer] = useState('');
+  const [walkInEmail, setWalkInEmail] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [successBill, setSuccessBill] = useState(null);
+  const [resendEmail, setResendEmail] = useState('');
+  const [resendingEmail, setResendingEmail] = useState(false);
+  const [showManualEmail, setShowManualEmail] = useState(false);
 
   // New Customer State
   const [showNewCustomerForm, setShowNewCustomerForm] = useState(false);
@@ -124,32 +128,90 @@ const POS = () => {
     setCheckoutLoading(true);
 
     try {
+      let customerPayload = selectedCustomer || undefined;
+      let newCustomerPayload = undefined;
+      let customerEmail = walkInEmail ? walkInEmail.trim() : undefined;
+
+      // If user typed into new customer form, pass it so backend can auto-save/link
+      if (showNewCustomerForm && (newCustomer.name || newCustomer.email || newCustomer.phone)) {
+        if (!newCustomer.name || !newCustomer.name.trim()) {
+          toast.error('Customer name is required');
+          setCheckoutLoading(false);
+          return;
+        }
+        newCustomerPayload = {
+          name: newCustomer.name.trim(),
+          email: (newCustomer.email || '').trim(),
+          phone: (newCustomer.phone || '').trim()
+        };
+        customerEmail = newCustomerPayload.email || undefined;
+      }
+
       const payload = {
         products: cart.map(item => ({ product: item.product._id, qty: item.qty })),
         paymentMethod,
-        customer: selectedCustomer || undefined
+        customer: customerPayload,
+        newCustomer: newCustomerPayload,
+        customerEmail
       };
 
       const { data } = await api.post('/sales', payload);
       toast.success('Bill Generated Successfully!');
       
-      const selectedCustomerObj = customers.find(c => c._id === selectedCustomer);
+      const selectedCustomerObj = customers.find(c => c._id === (data.data.customer || selectedCustomer));
+      const customerName = selectedCustomerObj?.name || newCustomerPayload?.name || (walkInEmail ? 'Customer' : '');
+      const customerPhone = selectedCustomerObj?.phone || newCustomerPayload?.phone || '';
+      const finalEmail = data.emailStatus?.recipient || customerEmail || selectedCustomerObj?.email || '';
+
       setSuccessBill({
         id: data.data._id,
         emailStatus: data.emailStatus,
         total: cartTotal,
-        phone: selectedCustomerObj?.phone,
-        name: selectedCustomerObj?.name,
+        phone: customerPhone,
+        name: customerName,
+        email: finalEmail,
         paymentMethod
       });
+      setResendEmail(finalEmail || '');
+      setShowManualEmail(false);
       setCart([]);
       setSelectedCustomer('');
+      setWalkInEmail('');
+      setShowNewCustomerForm(false);
+      setNewCustomer({ name: '', email: '', phone: '' });
+
+      // Refresh customers list if a new customer was registered
+      if (newCustomerPayload) {
+        api.get('/customers').then(res => setCustomers(res.data.data)).catch(() => {});
+      }
+
       refetchInv(); // refresh stock
       fetchMySales(); // refresh my performance
     } catch (err) {
       toast.error(err.response?.data?.message || 'Checkout failed');
     } finally {
       setCheckoutLoading(false);
+    }
+  };
+
+  const handleSendBillEmail = async (billId, targetEmail) => {
+    if (!targetEmail || !targetEmail.trim()) {
+      return toast.error('Please enter a valid email address');
+    }
+    setResendingEmail(true);
+    try {
+      const { data } = await api.post(`/sales/${billId}/send-email`, { email: targetEmail.trim() });
+      toast.success(data.message || 'Bill sent to customer successfully!');
+      setSuccessBill(prev => prev ? {
+        ...prev,
+        email: targetEmail.trim(),
+        emailStatus: data.emailStatus
+      } : null);
+      setShowManualEmail(false);
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to send bill email');
+    } finally {
+      setResendingEmail(false);
     }
   };
 
@@ -198,27 +260,79 @@ const POS = () => {
             <CheckCircle2 size={24} />
             <h3 style={{ margin: 0 }}>Bill Generated!</h3>
           </div>
-          <p style={{ marginTop: 10, color: 'var(--muted)' }}>Bill ID: {successBill.id} | Amount: ₹{successBill.total}</p>
+          <p style={{ marginTop: 10, color: 'var(--muted)' }}>
+            Bill ID: <strong style={{ color: 'var(--text)' }}>{successBill.id}</strong> | Amount: <strong style={{ color: 'var(--accent)' }}>₹{successBill.total}</strong>
+            {successBill.name ? ` | Customer: ${successBill.name}` : ''}
+          </p>
 
-          <div style={{ marginTop: 15 }}>
+          <div style={{ marginTop: 15, padding: '12px 14px', background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border)' }}>
             {successBill.emailStatus?.sent ? (
-              successBill.emailStatus.previewUrl ? (
-                <a href={successBill.emailStatus.previewUrl} target="_blank" rel="noreferrer" className="btn btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
-                  <Mail size={16} /> View Sent Email (Test)
-                </a>
-              ) : (
-                <span style={{ color: 'var(--green)', fontSize: '0.9rem', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  <CheckCircle2 size={16} /> Bill sent to customer's email!
-                </span>
-              )
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ color: 'var(--green)', fontSize: '0.92rem', display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+                    <CheckCircle2 size={18} /> Bill emailed successfully to {successBill.emailStatus.recipient || successBill.email}!
+                  </span>
+                  {successBill.emailStatus.previewUrl && (
+                    <a href={successBill.emailStatus.previewUrl} target="_blank" rel="noreferrer" className="btn btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none', padding: '4px 10px', fontSize: '0.8rem' }}>
+                      <Mail size={14} /> View Sent Email (Test)
+                    </a>
+                  )}
+                  <button
+                    className="btn btn-ghost"
+                    style={{ fontSize: '0.78rem', padding: '2px 8px', height: 'auto', textDecoration: 'underline' }}
+                    onClick={() => setShowManualEmail(!showManualEmail)}
+                  >
+                    {showManualEmail ? 'Close' : 'Send to another email'}
+                  </button>
+                </div>
+              </div>
             ) : (
-              <span style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>Bill saved. (No email provided for this customer)</span>
+              <div>
+                <div style={{ color: successBill.emailStatus?.error && !successBill.emailStatus.error.includes('No customer email') ? 'var(--orange, #f59e0b)' : 'var(--muted)', fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <AlertCircle size={16} />
+                  <span>
+                    {successBill.emailStatus?.error && !successBill.emailStatus.error.includes('No customer email')
+                      ? `Email delivery note: ${successBill.emailStatus.error}`
+                      : 'Bill saved. No customer email was specified during checkout.'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Instant Email Sender Form */}
+            {(!successBill.emailStatus?.sent || showManualEmail) && (
+              <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  type="email"
+                  className="form-input"
+                  style={{ flex: 1, minWidth: 220, fontSize: '0.85rem', padding: '7px 10px' }}
+                  placeholder="Enter customer email address..."
+                  value={resendEmail}
+                  onChange={e => setResendEmail(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSendBillEmail(successBill.id, resendEmail);
+                    }
+                  }}
+                />
+                <Button
+                  size="sm"
+                  variant="primary"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px' }}
+                  loading={resendingEmail}
+                  onClick={() => handleSendBillEmail(successBill.id, resendEmail)}
+                >
+                  <Send size={14} /> {successBill.emailStatus?.sent ? 'Resend Bill' : 'Send Bill Email'}
+                </Button>
+              </div>
             )}
           </div>
+
           <div style={{ display: 'flex', gap: 10, marginTop: 15, flexWrap: 'wrap' }}>
             {successBill.phone && (
               <a 
-                href={`https://wa.me/91${successBill.phone.replace(/\D/g,'')}?text=${encodeURIComponent(`Hello ${successBill.name},\nThank you for shopping with us!\nYour bill amount is ₹${successBill.total}.\nBill ID: ${successBill.id}`)}`}
+                href={`https://wa.me/91${successBill.phone.replace(/\D/g,'')}?text=${encodeURIComponent(`Hello ${successBill.name || 'Customer'},\nThank you for shopping with us!\nYour bill amount is ₹${successBill.total}.\nBill ID: ${successBill.id}`)}`}
                 target="_blank" rel="noreferrer"
                 className="btn btn-primary" 
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 8, textDecoration: 'none', background: '#25D366', borderColor: '#25D366' }}
@@ -226,7 +340,7 @@ const POS = () => {
                 Send WhatsApp
               </a>
             )}
-            <Button variant="ghost" onClick={() => setSuccessBill(null)}>New Sale</Button>
+            <Button variant="ghost" onClick={() => { setSuccessBill(null); setShowManualEmail(false); }}>New Sale</Button>
           </div>
         </div>
       )}
@@ -413,17 +527,32 @@ const POS = () => {
               {showNewCustomerForm ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--surface1)', padding: 12, borderRadius: 8, border: '1px dashed var(--border)' }}>
                   <input type="text" className="form-input" placeholder="Name *" value={newCustomer.name} onChange={e => setNewCustomer({ ...newCustomer, name: e.target.value })} />
-                  <input type="email" className="form-input" placeholder="Email" value={newCustomer.email} onChange={e => setNewCustomer({ ...newCustomer, email: e.target.value })} />
+                  <input type="email" className="form-input" placeholder="Email (for bill)" value={newCustomer.email} onChange={e => setNewCustomer({ ...newCustomer, email: e.target.value })} />
                   <input type="text" className="form-input" placeholder="Phone" value={newCustomer.phone} onChange={e => setNewCustomer({ ...newCustomer, phone: e.target.value })} />
-                  <Button size="sm" onClick={handleAddCustomer} loading={customerLoading}>Save & Select</Button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <Button size="sm" onClick={handleAddCustomer} loading={customerLoading}>Save & Select</Button>
+                    <span style={{ fontSize: '0.74rem', color: 'var(--muted)' }}>(or click Generate Bill directly)</span>
+                  </div>
                 </div>
               ) : (
-                <select className="form-input" value={selectedCustomer} onChange={e => setSelectedCustomer(e.target.value)}>
-                  <option value="">Walk-in Customer</option>
-                  {customers.map(c => (
-                    <option key={c._id} value={c._id}>{c.name} ({c.email || c.phone || 'No contact'})</option>
-                  ))}
-                </select>
+                <>
+                  <select className="form-input" value={selectedCustomer} onChange={e => setSelectedCustomer(e.target.value)}>
+                    <option value="">Walk-in Customer</option>
+                    {customers.map(c => (
+                      <option key={c._id} value={c._id}>{c.name} ({c.email || c.phone || 'No contact'})</option>
+                    ))}
+                  </select>
+                  {!selectedCustomer && (
+                    <input
+                      type="email"
+                      className="form-input"
+                      style={{ marginTop: 6, fontSize: '0.82rem', padding: '6px 10px' }}
+                      placeholder="Customer email for bill receipt (optional)"
+                      value={walkInEmail}
+                      onChange={e => setWalkInEmail(e.target.value)}
+                    />
+                  )}
+                </>
               )}
             </div>
             

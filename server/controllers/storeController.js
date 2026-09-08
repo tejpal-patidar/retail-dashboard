@@ -1,5 +1,6 @@
 const asyncHandler = require('express-async-handler');
 const Store = require('../models/Store');
+const { verifyEmailConfig } = require('../utils/emailService');
 
 // @desc    Get current store settings
 // @route   GET /api/store/settings
@@ -49,10 +50,10 @@ const updateStoreSettings = asyncHandler(async (req, res) => {
   if (upiId !== undefined) store.upiId = upiId;
 
   if (emailConfig) {
-    if (emailConfig.email !== undefined) store.emailConfig.email = emailConfig.email;
+    if (emailConfig.email !== undefined) store.emailConfig.email = emailConfig.email.trim();
     // Only update appPassword if it's not the masked value and not undefined
     if (emailConfig.appPassword && emailConfig.appPassword !== '********') {
-      store.emailConfig.appPassword = emailConfig.appPassword;
+      store.emailConfig.appPassword = emailConfig.appPassword.trim();
     }
     // Handle clearing the password
     if (emailConfig.appPassword === '') {
@@ -76,6 +77,41 @@ const updateStoreSettings = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc    Test email configuration
+// @route   POST /api/store/test-email
+// @access  Private (admin/store_owner)
+const testEmailConfig = asyncHandler(async (req, res) => {
+  const store = await Store.findById(req.storeId);
+  if (!store) {
+    res.status(404);
+    throw new Error('Store not found');
+  }
+
+  let storeToTest = store;
+  if (req.body.email && req.body.appPassword && req.body.appPassword !== '********') {
+    storeToTest = {
+      ...store.toObject(),
+      emailConfig: {
+        email: req.body.email.trim(),
+        appPassword: req.body.appPassword.trim()
+      }
+    };
+  }
+
+  const result = await verifyEmailConfig(storeToTest);
+  if (!result.success) {
+    res.status(400);
+    throw new Error(`Email verification failed: ${result.error}`);
+  }
+
+  res.json({
+    success: true,
+    message: `Email configuration verified successfully! Connected as ${result.fromEmail}.`,
+    fromEmail: result.fromEmail,
+    isReal: result.isReal
+  });
+});
+
 // @desc    Get public store info (for POS / UPI etc)
 // @route   GET /api/store/info
 // @access  Private (Any authenticated user)
@@ -95,4 +131,5 @@ const getStoreInfo = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { getStoreSettings, updateStoreSettings, getStoreInfo };
+module.exports = { getStoreSettings, updateStoreSettings, testEmailConfig, getStoreInfo };
+

@@ -49,6 +49,23 @@ const Settings = () => {
     }
   };
 
+  const [testingEmail, setTestingEmail] = useState(false);
+
+  const handleTestEmail = async () => {
+    setTestingEmail(true);
+    try {
+      const { data } = await api.post('/store/test-email', {
+        email: settings.emailConfig.email,
+        appPassword: settings.emailConfig.appPassword
+      });
+      toast.success(data.message || 'Email connection verified successfully!');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Email verification failed. Check credentials.');
+    } finally {
+      setTestingEmail(false);
+    }
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
     setSaving(true);
@@ -142,6 +159,11 @@ const Settings = () => {
             <small style={{ display: 'block', marginTop: 5, color: 'var(--muted2)' }}>
               Note: Leave empty if you don't want to change the existing password. Use Google Account Settings {'->'} Security to generate an App Password.
             </small>
+            <div style={{ marginTop: 12 }}>
+              <Button type="button" variant="secondary" size="sm" loading={testingEmail} onClick={handleTestEmail}>
+                Test Email Connection
+              </Button>
+            </div>
           </div>
 
           <hr style={{ margin: '30px 0', border: 'none', borderTop: '1px solid var(--border)' }} />
